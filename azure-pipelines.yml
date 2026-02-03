@@ -1,0 +1,265 @@
+# =============================================================================
+# TestCase Generation API - Multistage CI/CD Pipeline
+# Branches: dev | UAT | prod
+# Environments: Dev (auto) → UAT (auto) → Prod (manual approval)
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - dev
+      - UAT
+      - prod
+
+pr:
+  branches:
+    include:
+      - dev
+      - UAT
+      - prod
+
+variables:
+  nodeVersion: '22.x'
+  # Variable groups are linked per deploy stage (Dev/UAT/Prod) for .env.prod placeholder replacement.
+
+stages:
+  # ---------------------------------------------------------------------------
+  # Stage 1: Build (runs on dev, UAT, prod)
+  # ---------------------------------------------------------------------------
+  - stage: Build
+    displayName: 'Build & Test'
+    jobs:
+      - job: BuildJob
+        displayName: 'Build API'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          - task: NodeTool@0
+            displayName: 'Use Node.js $(nodeVersion)'
+            inputs:
+              versionSpec: $(nodeVersion)
+
+          - task: Cache@2
+            displayName: 'Cache npm'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              path: $(Pipeline.Workspace)/.npm
+            continueOnError: true
+
+          - script: |
+              npm ci
+            displayName: 'npm ci'
+
+          - script: |
+              npm run build
+            displayName: 'Build (esbuild)'
+            env:
+              # Build uses .development.env-style; override via variable group if needed
+              NODE_ENV: development
+
+          - task: CopyFiles@2
+            displayName: 'Prepare deployment artifact'
+            inputs:
+              SourceFolder: '$(Build.SourcesDirectory)'
+              Contents: |
+                dist/**
+                package.json
+                package-lock.json
+                .env.prod
+              TargetFolder: '$(Build.ArtifactStagingDirectory)/drop'
+              flattenFolders: false
+            continueOnError: false
+
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish artifact'
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)/drop'
+              ArtifactName: 'drop'
+              publishLocation: 'Container'
+
+  # ---------------------------------------------------------------------------
+  # Stage 2: Deploy to Dev (branch: dev)
+  # ---------------------------------------------------------------------------
+  - stage: Deploy_Dev
+    displayName: 'Deploy to Dev'
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/dev'))
+    jobs:
+      - deployment: DeployDev
+        displayName: 'Deploy to Dev'
+        environment: 'Dev'
+        variables:
+          - group: testcase-api-dev-vg
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadBuildArtifacts@1
+                  displayName: 'Download artifact'
+                  inputs:
+                    buildType: 'current'
+                    downloadType: 'single'
+                    artifactName: 'drop'
+                    downloadPath: '$(System.ArtifactsDirectory)'
+
+                - task: NodeTool@0
+                  displayName: 'Use Node.js $(nodeVersion)'
+                  inputs:
+                    versionSpec: $(nodeVersion)
+
+                - script: |
+                    cp -r $(System.ArtifactsDirectory)/drop/* $(System.DefaultWorkingDirectory)/
+                    npm ci --omit=dev
+                  displayName: 'Restore and install production deps'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+
+                - script: |
+                    cp .env.prod .production.env
+                    sed -i "s~{{APP_PORT}}~$APP_PORT~g" .production.env
+                    sed -i "s~{{PGSQL_USERNAME}}~$PGSQL_USERNAME~g" .production.env
+                    sed -i "s~{{PGSQL_PASSWORD}}~$PGSQL_PASSWORD~g" .production.env
+                    sed -i "s~{{PGSQL_SERVER}}~$PGSQL_SERVER~g" .production.env
+                    sed -i "s~{{PGSQL_DATABASE}}~$PGSQL_DATABASE~g" .production.env
+                    sed -i "s~{{PGSQL_PORT}}~$PGSQL_PORT~g" .production.env
+                    cp .production.env .env
+                  displayName: 'Replace .env.prod placeholders from variable group'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+                  env:
+                    APP_PORT: $(APP_PORT)
+                    PGSQL_USERNAME: $(PGSQL_USERNAME)
+                    PGSQL_PASSWORD: $(PGSQL_PASSWORD)
+                    PGSQL_SERVER: $(PGSQL_SERVER)
+                    PGSQL_DATABASE: $(PGSQL_DATABASE)
+                    PGSQL_PORT: $(PGSQL_PORT)
+
+                # Deploy step: replace with your actual target (App Service, VM, AKS, etc.)
+                - script: |
+                    echo "Deploying to Dev environment"
+                    echo "Add your deployment task here (e.g. Azure Web App, SSH, Azure CLI)"
+                  displayName: 'Deploy to Dev (placeholder)'
+
+  # ---------------------------------------------------------------------------
+  # Stage 3: Deploy to UAT (branch: UAT)
+  # ---------------------------------------------------------------------------
+  - stage: Deploy_UAT
+    displayName: 'Deploy to UAT'
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/UAT'))
+    jobs:
+      - deployment: DeployUAT
+        displayName: 'Deploy to UAT'
+        environment: 'UAT'
+        variables:
+          - group: testcase-api-uat-vg
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadBuildArtifacts@1
+                  displayName: 'Download artifact'
+                  inputs:
+                    buildType: 'current'
+                    downloadType: 'single'
+                    artifactName: 'drop'
+                    downloadPath: '$(System.ArtifactsDirectory)'
+
+                - task: NodeTool@0
+                  displayName: 'Use Node.js $(nodeVersion)'
+                  inputs:
+                    versionSpec: $(nodeVersion)
+
+                - script: |
+                    cp -r $(System.ArtifactsDirectory)/drop/* $(System.DefaultWorkingDirectory)/
+                    npm ci --omit=dev
+                  displayName: 'Restore and install production deps'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+
+                - script: |
+                    cp .env.prod .production.env
+                    sed -i "s~{{APP_PORT}}~$APP_PORT~g" .production.env
+                    sed -i "s~{{PGSQL_USERNAME}}~$PGSQL_USERNAME~g" .production.env
+                    sed -i "s~{{PGSQL_PASSWORD}}~$PGSQL_PASSWORD~g" .production.env
+                    sed -i "s~{{PGSQL_SERVER}}~$PGSQL_SERVER~g" .production.env
+                    sed -i "s~{{PGSQL_DATABASE}}~$PGSQL_DATABASE~g" .production.env
+                    sed -i "s~{{PGSQL_PORT}}~$PGSQL_PORT~g" .production.env
+                    cp .production.env .env
+                  displayName: 'Replace .env.prod placeholders from variable group'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+                  env:
+                    APP_PORT: $(APP_PORT)
+                    PGSQL_USERNAME: $(PGSQL_USERNAME)
+                    PGSQL_PASSWORD: $(PGSQL_PASSWORD)
+                    PGSQL_SERVER: $(PGSQL_SERVER)
+                    PGSQL_DATABASE: $(PGSQL_DATABASE)
+                    PGSQL_PORT: $(PGSQL_PORT)
+
+                - script: |
+                    echo "Deploying to UAT environment"
+                    echo "Add your deployment task here"
+                  displayName: 'Deploy to UAT (placeholder)'
+
+  # ---------------------------------------------------------------------------
+  # Stage 4: Deploy to Prod (branch: prod) — APPROVAL REQUIRED via Environment
+  # ---------------------------------------------------------------------------
+  - stage: Deploy_Prod
+    displayName: 'Deploy to Production'
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/prod'))
+    jobs:
+      - deployment: DeployProd
+        displayName: 'Deploy to Production'
+        environment: 'Prod'   # Configure approval in Azure DevOps → Environments → Prod
+        variables:
+          - group: testcase-api-prod-vg
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadBuildArtifacts@1
+                  displayName: 'Download artifact'
+                  inputs:
+                    buildType: 'current'
+                    downloadType: 'single'
+                    artifactName: 'drop'
+                    downloadPath: '$(System.ArtifactsDirectory)'
+
+                - task: NodeTool@0
+                  displayName: 'Use Node.js $(nodeVersion)'
+                  inputs:
+                    versionSpec: $(nodeVersion)
+
+                - script: |
+                    cp -r $(System.ArtifactsDirectory)/drop/* $(System.DefaultWorkingDirectory)/
+                    npm ci --omit=dev
+                  displayName: 'Restore and install production deps'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+
+                - script: |
+                    cp .env.prod .production.env
+                    sed -i "s~{{APP_PORT}}~$APP_PORT~g" .production.env
+                    sed -i "s~{{PGSQL_USERNAME}}~$PGSQL_USERNAME~g" .production.env
+                    sed -i "s~{{PGSQL_PASSWORD}}~$PGSQL_PASSWORD~g" .production.env
+                    sed -i "s~{{PGSQL_SERVER}}~$PGSQL_SERVER~g" .production.env
+                    sed -i "s~{{PGSQL_DATABASE}}~$PGSQL_DATABASE~g" .production.env
+                    sed -i "s~{{PGSQL_PORT}}~$PGSQL_PORT~g" .production.env
+                    cp .production.env .env
+                  displayName: 'Replace .env.prod placeholders from variable group'
+                  workingDirectory: $(System.DefaultWorkingDirectory)
+                  env:
+                    APP_PORT: $(APP_PORT)
+                    PGSQL_USERNAME: $(PGSQL_USERNAME)
+                    PGSQL_PASSWORD: $(PGSQL_PASSWORD)
+                    PGSQL_SERVER: $(PGSQL_SERVER)
+                    PGSQL_DATABASE: $(PGSQL_DATABASE)
+                    PGSQL_PORT: $(PGSQL_PORT)
+
+                - script: |
+                    echo "Deploying to Production environment"
+                    echo "Add your deployment task here"
+                  displayName: 'Deploy to Prod (placeholder)'

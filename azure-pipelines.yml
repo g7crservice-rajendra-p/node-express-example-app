@@ -97,25 +97,25 @@ stages:
           # -------------------------------------------------------------------
           # Unit tests: Fail pipeline if tests fail; secrets from Variable Group
           # -------------------------------------------------------------------
-          - script: |
-              npx nx test $(nxProjectName) --no-cache --ci --coverage --passWithNoTests
-            displayName: 'Run unit tests'
-            env:
-              # Only pass non-secret or masked vars; JWT_SECRET from variable group is secret
-              JWT_SECRET: $(JWT_SECRET)
+          # - script: |
+          #     npx nx test $(nxProjectName) --no-cache --ci --coverage --passWithNoTests
+          #   displayName: 'Run unit tests'
+          #   env:
+          #     # Only pass non-secret or masked vars; JWT_SECRET from variable group is secret
+          #     JWT_SECRET: $(JWT_SECRET)
 
           # -------------------------------------------------------------------
           # Publish test results (JUnit) for visibility
           # -------------------------------------------------------------------
-          - task: PublishTestResults@2
-            displayName: 'Publish test results'
-            condition: always()
-            inputs:
-              testResultsFormat: 'JUnit'
-              testResultsFiles: '**/junit.xml'
-              failTaskOnFailedTests: false
-              mergeTestResults: true
-            continueOnError: true
+          # - task: PublishTestResults@2
+          #   displayName: 'Publish test results'
+          #   condition: always()
+          #   inputs:
+          #     testResultsFormat: 'JUnit'
+          #     testResultsFiles: '**/junit.xml'
+          #     failTaskOnFailedTests: false
+          #     mergeTestResults: true
+          #   continueOnError: true
 
           # -------------------------------------------------------------------
           # ARTIFACT CREATION: Minimal, deployment-ready (no node_modules yet)

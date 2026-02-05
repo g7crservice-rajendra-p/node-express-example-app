@@ -1,0 +1,412 @@
+# =============================================================================
+# Enterprise Multi-Stage CI/CD Pipeline
+# TestCase Generation API (Node.js / Express)
+# =============================================================================
+# Branches: dev | uat | prod
+# Environments: Build (all) → Deploy Dev/uat/Prod (branch-gated, Prod = approval)
+# Best practices: Variable Groups, no hardcoded secrets, token replacement,
+#                 minimal artifacts, deployment jobs, environment approvals.
+# =============================================================================
+
+trigger:
+  branches:
+    include:
+      - dev
+      - uat
+      - prod
+  paths:
+    exclude:
+      - '*.md'
+      - 'docs/**'
+
+pr:
+  branches:
+    include:
+      - dev
+      - uat
+      - prod
+
+# -----------------------------------------------------------------------------
+# Variables: Non-secret at pipeline level. Secrets and env-specific values
+# come from Variable Groups (Library) — never hardcode in YAML.
+# -----------------------------------------------------------------------------
+variables:
+  nodeVersion: '22.x'
+  buildConfiguration: 'Release'
+  # Artifact name — immutable reference between stages
+  artifactName: 'drop'
+  # Nx project (from project.json)
+  nxProjectName: 'api'
+  buildOutputPath: 'dist/api'
+  nodeStartFile: 'main.js'
+  prismaSourcePath: 'src/prisma'
+  # Config template for token replacement (tokens: __VAR_NAME__)
+  configTemplateFile: '.env.template'
+
+# =============================================================================
+# STAGE 1: BUILD
+# =============================================================================
+# Restore dependencies, build in Release mode, run unit tests.
+# Uses npm cache for performance. Output is minimal (no sourcemaps in production).
+# -----------------------------------------------------------------------------
+stages:
+  - stage: Build
+    displayName: 'Build & Test'
+    jobs:
+      - job: BuildJob
+        displayName: 'Restore, Build, Test'
+        pool:
+          vmImage: 'ubuntu-latest'
+        workspace:
+          clean: all
+        steps:
+          # -------------------------------------------------------------------
+          # Runtime: Explicit Node.js version (configurable via variable)
+          # -------------------------------------------------------------------
+          - task: NodeTool@0
+            displayName: 'Use Node.js $(nodeVersion)'
+            inputs:
+              versionSpec: $(nodeVersion)
+
+          # -------------------------------------------------------------------
+          # Cache: Restore npm cache — speeds up subsequent runs
+          # -------------------------------------------------------------------
+          - task: Cache@2
+            displayName: 'Cache npm'
+            inputs:
+              key: 'npm | "$(Agent.OS)" | package-lock.json'
+              path: $(Pipeline.Workspace)/.npm
+            continueOnError: true
+
+          # -------------------------------------------------------------------
+          # Restore: Deterministic install (package-lock.json)
+          # -------------------------------------------------------------------
+          - script: |
+              npm ci
+            displayName: 'Restore dependencies (npm ci)'
+
+          # -------------------------------------------------------------------
+          # Build: Release mode, optimized (no sourcemaps in production config)
+          # -------------------------------------------------------------------
+          - script: |
+              npx nx build $(nxProjectName) --configuration=production
+            displayName: 'Build application (Release)'
+            env:
+              NODE_ENV: production
+
+          # -------------------------------------------------------------------
+          # Unit tests: Fail pipeline if tests fail; secrets from Variable Group
+          # -------------------------------------------------------------------
+          - script: |
+              npx nx test $(nxProjectName) --no-cache --ci --coverage --passWithNoTests
+            displayName: 'Run unit tests'
+            env:
+              # Only pass non-secret or masked vars; JWT_SECRET from variable group is secret
+              JWT_SECRET: $(JWT_SECRET)
+
+          # -------------------------------------------------------------------
+          # Publish test results (JUnit) for visibility
+          # -------------------------------------------------------------------
+          - task: PublishTestResults@2
+            displayName: 'Publish test results'
+            condition: always()
+            inputs:
+              testResultsFormat: 'JUnit'
+              testResultsFiles: '**/junit.xml'
+              failTaskOnFailedTests: false
+              mergeTestResults: true
+            continueOnError: true
+
+          # -------------------------------------------------------------------
+          # ARTIFACT CREATION: Minimal, deployment-ready (no node_modules yet)
+          # Copy only build output, package files, and config template.
+          # -------------------------------------------------------------------
+          - task: CopyFiles@2
+            displayName: 'Prepare deployment artifact'
+            inputs:
+              SourceFolder: '$(Build.SourcesDirectory)'
+              Contents: |
+                $(buildOutputPath)/**
+                package.json
+                package-lock.json
+                $(configTemplateFile)
+              TargetFolder: '$(Build.ArtifactStagingDirectory)/drop'
+              flattenFolders: false
+            continueOnError: false
+
+          # -------------------------------------------------------------------
+          # Install production dependencies only; reduce artifact size
+          # -------------------------------------------------------------------
+          - script: |
+              cd $(Build.ArtifactStagingDirectory)/drop
+              npm ci --omit=dev --ignore-scripts
+              rm -rf node_modules/.cache 2>/dev/null || true
+            displayName: 'Production dependencies only'
+
+          # -------------------------------------------------------------------
+          # Clean artifact: Exclude logs, temp, dev configs (security & size)
+          # -------------------------------------------------------------------
+          - script: |
+              set -e
+              cd $(Build.ArtifactStagingDirectory)/drop
+              find . -type f -name "*.log" -delete 2>/dev/null || true
+              find . -type d -name ".cache" -exec rm -rf {} + 2>/dev/null || true
+              find . -type d -name "tmp" -exec rm -rf {} + 2>/dev/null || true
+              rm -rf .git .env .env.local .env.development .env.prod 2>/dev/null || true
+            displayName: 'Clean artifact (exclude logs, temp, dev configs)'
+
+          # -------------------------------------------------------------------
+          # ARTIFACT PUBLISH: Immutable pipeline artifact for deployment stages
+          # -------------------------------------------------------------------
+          - task: PublishPipelineArtifact@1
+            displayName: 'Publish build artifact'
+            inputs:
+              targetPath: '$(Build.ArtifactStagingDirectory)/drop'
+              artifact: $(artifactName)
+              publishLocation: 'pipeline'
+
+  # ===========================================================================
+  # STAGE 2: DEPLOY TO DEV (branch: dev)
+  # ===========================================================================
+  # Token replacement from Variable Group; deploy to Azure App Service (Dev).
+  # ---------------------------------------------------------------------------
+  - stage: Deploy_Dev
+    displayName: 'Deploy to Dev'
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/dev'))
+    jobs:
+      - deployment: DeployDev
+        displayName: 'Deploy to Dev'
+        environment: 'Dev'
+        variables:
+          - group: testcase-api-dev-vg
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadPipelineArtifact@1
+                  displayName: 'Download artifact'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: $(artifactName)
+                    targetPath: '$(Pipeline.Workspace)/drop'
+
+                - task: NodeTool@0
+                  displayName: 'Use Node.js $(nodeVersion)'
+                  inputs:
+                    versionSpec: $(nodeVersion)
+
+                - script: |
+                    cd $(Pipeline.Workspace)/drop
+                    if [ -f .env.template ]; then cp .env.template .env; fi
+                  displayName: 'Apply config from template'
+
+                # -----------------------------------------------------------------
+                # TOKEN REPLACEMENT: __VAR_NAME__ → Variable Group values
+                # Requires: Replace Tokens extension (qetza.replacetokens)
+                # Custom pattern: prefix __ , suffix __
+                # -----------------------------------------------------------------
+                - task: replacetokens@5
+                  displayName: 'Replace tokens in config'
+                  inputs:
+                    rootDirectory: '$(Pipeline.Workspace)/drop'
+                    targetFiles: '**/.env'
+                    encoding: 'auto'
+                    tokenPattern: 'custom'
+                    tokenPrefix: '__'
+                    tokenSuffix: '__'
+                    writeBOM: false
+                    actionOnMissing: 'warn'
+                    actionOnNoFiles: 'continue'
+                  continueOnError: true
+
+                # Fallback: replace __VAR_NAME__ if Replace Tokens extension not installed
+                - script: |
+                    set -e
+                    cd $(Pipeline.Workspace)/drop
+                    [ -f .env ] || touch .env
+                    for var in APP_PORT PGSQL_USERNAME PGSQL_PASSWORD PGSQL_SERVER PGSQL_DATABASE PGSQL_PORT JWT_SECRET; do
+                      eval "val=\$$var"
+                      [ -n "$val" ] && sed -i "s|__${var}__|$val|g" .env 2>/dev/null || true
+                    done
+                  displayName: 'Replace __VAR__ placeholders (fallback)'
+                  env:
+                    APP_PORT: $(APP_PORT)
+                    PGSQL_USERNAME: $(PGSQL_USERNAME)
+                    PGSQL_PASSWORD: $(PGSQL_PASSWORD)
+                    PGSQL_SERVER: $(PGSQL_SERVER)
+                    PGSQL_DATABASE: $(PGSQL_DATABASE)
+                    PGSQL_PORT: $(PGSQL_PORT)
+                    JWT_SECRET: $(JWT_SECRET)
+
+                # -----------------------------------------------------------------
+                # Deploy to Azure App Service (Dev)
+                # AZURE_SERVICE_CONNECTION_DEV, AZURE_WEBAPP_NAME_DEV from Variable Group
+                # -----------------------------------------------------------------
+                - task: AzureWebApp@1
+                  displayName: 'Deploy to Azure App Service (Dev)'
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION_DEV)
+                    appType: 'webAppLinux'
+                    appName: $(AZURE_WEBAPP_NAME_DEV)
+                    package: '$(Pipeline.Workspace)/drop'
+                    runtimeStack: 'NODE|22-lts'
+
+  # ===========================================================================
+  # STAGE 3: DEPLOY TO uat (branch: uat)
+  # ===========================================================================
+  - stage: Deploy_UAT
+    displayName: 'Deploy to uat'
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/uat'))
+    jobs:
+      - deployment: DeployUAT
+        displayName: 'Deploy to uat'
+        environment: 'uat'
+        variables:
+          - group: testcase-api-uat-vg
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadPipelineArtifact@1
+                  displayName: 'Download artifact'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: $(artifactName)
+                    targetPath: '$(Pipeline.Workspace)/drop'
+
+                - task: NodeTool@0
+                  displayName: 'Use Node.js $(nodeVersion)'
+                  inputs:
+                    versionSpec: $(nodeVersion)
+
+                - script: |
+                    cd $(Pipeline.Workspace)/drop
+                    if [ -f .env.template ]; then cp .env.template .env; fi
+                  displayName: 'Apply config from template'
+
+                - task: replacetokens@5
+                  displayName: 'Replace tokens in config'
+                  inputs:
+                    rootDirectory: '$(Pipeline.Workspace)/drop'
+                    targetFiles: '**/.env'
+                    encoding: 'auto'
+                    tokenPattern: 'custom'
+                    tokenPrefix: '__'
+                    tokenSuffix: '__'
+                    writeBOM: false
+                    actionOnMissing: 'warn'
+                    actionOnNoFiles: 'continue'
+                  continueOnError: true
+
+                - script: |
+                    set -e
+                    cd $(Pipeline.Workspace)/drop
+                    [ -f .env ] || touch .env
+                    for var in APP_PORT PGSQL_USERNAME PGSQL_PASSWORD PGSQL_SERVER PGSQL_DATABASE PGSQL_PORT JWT_SECRET; do
+                      eval "val=\$$var"
+                      [ -n "$val" ] && sed -i "s|__${var}__|$val|g" .env 2>/dev/null || true
+                    done
+                  displayName: 'Replace __VAR__ placeholders (fallback)'
+                  env:
+                    APP_PORT: $(APP_PORT)
+                    PGSQL_USERNAME: $(PGSQL_USERNAME)
+                    PGSQL_PASSWORD: $(PGSQL_PASSWORD)
+                    PGSQL_SERVER: $(PGSQL_SERVER)
+                    PGSQL_DATABASE: $(PGSQL_DATABASE)
+                    PGSQL_PORT: $(PGSQL_PORT)
+                    JWT_SECRET: $(JWT_SECRET)
+
+                - task: AzureWebApp@1
+                  displayName: 'Deploy to Azure App Service (uat)'
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION_UAT)
+                    appType: 'webAppLinux'
+                    appName: $(AZURE_WEBAPP_NAME_UAT)
+                    package: '$(Pipeline.Workspace)/drop'
+                    runtimeStack: 'NODE|22-lts'
+
+  # ===========================================================================
+  # STAGE 4: DEPLOY TO PRODUCTION (branch: prod)
+  # ===========================================================================
+  # Environment "Prod" should have approval gates in Azure DevOps (Environments).
+  # Condition prevents accidental prod deploy from other branches.
+  # ---------------------------------------------------------------------------
+  - stage: Deploy_Prod
+    displayName: 'Deploy to Production'
+    dependsOn: Build
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/prod'))
+    jobs:
+      - deployment: DeployProd
+        displayName: 'Deploy to Production'
+        environment: 'Prod'
+        variables:
+          - group: testcase-api-prod-vg
+        pool:
+          vmImage: 'ubuntu-latest'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadPipelineArtifact@1
+                  displayName: 'Download artifact'
+                  inputs:
+                    buildType: 'current'
+                    artifactName: $(artifactName)
+                    targetPath: '$(Pipeline.Workspace)/drop'
+
+                - script: |
+                    cd $(Pipeline.Workspace)/drop
+                    if [ -f .env.template ]; then cp .env.template .env; fi
+                  displayName: 'Apply config from template'
+
+                - task: replacetokens@5
+                  displayName: 'Replace tokens in config'
+                  inputs:
+                    rootDirectory: '$(Pipeline.Workspace)/drop'
+                    targetFiles: '**/.env'
+                    encoding: 'auto'
+                    tokenPattern: 'custom'
+                    tokenPrefix: '__'
+                    tokenSuffix: '__'
+                    writeBOM: false
+                    actionOnMissing: 'warn'
+                    actionOnNoFiles: 'continue'
+                  continueOnError: true
+
+                - script: |
+                    set -e
+                    cd $(Pipeline.Workspace)/drop
+                    [ -f .env ] || touch .env
+                    for var in APP_PORT PGSQL_USERNAME PGSQL_PASSWORD PGSQL_SERVER PGSQL_DATABASE PGSQL_PORT JWT_SECRET; do
+                      eval "val=\$$var"
+                      [ -n "$val" ] && sed -i "s|__${var}__|$val|g" .env 2>/dev/null || true
+                    done
+                  displayName: 'Replace __VAR__ placeholders (fallback)'
+                  env:
+                    APP_PORT: $(APP_PORT)
+                    PGSQL_USERNAME: $(PGSQL_USERNAME)
+                    PGSQL_PASSWORD: $(PGSQL_PASSWORD)
+                    PGSQL_SERVER: $(PGSQL_SERVER)
+                    PGSQL_DATABASE: $(PGSQL_DATABASE)
+                    PGSQL_PORT: $(PGSQL_PORT)
+                    JWT_SECRET: $(JWT_SECRET)
+
+                # -----------------------------------------------------------------
+                # Production deploy: Azure App Service
+                # Configure approval on Environment "Prod" in Azure DevOps.
+                # Optional: use slot (staging) then swap for zero-downtime.
+                # -----------------------------------------------------------------
+                - task: AzureWebApp@1
+                  displayName: 'Deploy to Azure App Service (Production)'
+                  inputs:
+                    azureSubscription: $(AZURE_SERVICE_CONNECTION_PROD)
+                    appType: 'webAppLinux'
+                    appName: $(AZURE_WEBAPP_NAME_PROD)
+                    package: '$(Pipeline.Workspace)/drop'
+                    runtimeStack: 'NODE|22-lts'

@@ -254,7 +254,7 @@ stages:
                     appName: $(AZURE_WEBAPP_NAME_DEV)
                     package: '$(Pipeline.Workspace)/drop'
                     runtimeStack: 'NODE|22-lts'
-
+                    startUpCommand: 'node dist/api/main.js'
   # # ===========================================================================
   # # STAGE 3: DEPLOY TO uat (branch: uat)
   # # ===========================================================================

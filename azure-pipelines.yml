@@ -38,8 +38,7 @@ variables:
   # Nx project (from project.json)
   nxProjectName: 'api'
   buildOutputPath: 'dist/api'
-  nodeStartFile: 'main.js'
-  prismaSourcePath: 'src/prisma'
+  nodeStartFile: 'node dist/api/main.js'
   # Config template for token replacement (tokens: __VAR_NAME__)
   configTemplateFile: '.env.template'
 
@@ -139,7 +138,7 @@ stages:
           # -------------------------------------------------------------------
           - script: |
               cd $(Build.ArtifactStagingDirectory)/drop
-              npm ci --omit=dev --ignore-scripts
+              npm ci --omit=dev
               rm -rf node_modules/.cache 2>/dev/null || true
             displayName: 'Production dependencies only'
 
@@ -249,12 +248,12 @@ stages:
                 - task: AzureWebApp@1
                   displayName: 'Deploy to Azure App Service (Dev)'
                   inputs:
-                    azureSubscription: AZURE_SERVICE_CONNECTION_DEV
+                    azureSubscription: 'AZURE_SERVICE_CONNECTION_DEV'
                     appType: 'webAppLinux'
                     appName: $(AZURE_WEBAPP_NAME_DEV)
                     package: '$(Pipeline.Workspace)/drop'
                     runtimeStack: 'NODE|22-lts'
-                    startUpCommand: 'node dist/api/main.js'
+                    startUpCommand: $(nodeStartFile)
   # # ===========================================================================
   # # STAGE 3: DEPLOY TO uat (branch: uat)
   # # ===========================================================================

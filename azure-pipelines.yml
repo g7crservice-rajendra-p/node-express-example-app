@@ -180,6 +180,7 @@ stages:
         environment: 'Dev'
         variables:
           - group: testcase-api-dev-vg
+          - group: testcase-platform-dev-vg
         pool:
           vmImage: 'ubuntu-latest'
         strategy:
@@ -223,23 +224,23 @@ stages:
                   continueOnError: true
 
                 # Fallback: replace __VAR_NAME__ if Replace Tokens extension not installed
-                - script: |
-                    set -e
-                    cd $(Pipeline.Workspace)/drop
-                    [ -f .env ] || touch .env
-                    for var in APP_PORT PGSQL_USERNAME PGSQL_PASSWORD PGSQL_SERVER PGSQL_DATABASE PGSQL_PORT JWT_SECRET; do
-                      eval "val=\$$var"
-                      [ -n "$val" ] && sed -i "s|__${var}__|$val|g" .env 2>/dev/null || true
-                    done
-                  displayName: 'Replace __VAR__ placeholders (fallback)'
-                  env:
-                    APP_PORT: $(APP_PORT)
-                    PGSQL_USERNAME: $(PGSQL_USERNAME)
-                    PGSQL_PASSWORD: $(PGSQL_PASSWORD)
-                    PGSQL_SERVER: $(PGSQL_SERVER)
-                    PGSQL_DATABASE: $(PGSQL_DATABASE)
-                    PGSQL_PORT: $(PGSQL_PORT)
-                    JWT_SECRET: $(JWT_SECRET)
+                # - script: |
+                #     set -e
+                #     cd $(Pipeline.Workspace)/drop
+                #     [ -f .env ] || touch .env
+                #     for var in APP_PORT PGSQL_USERNAME PGSQL_PASSWORD PGSQL_SERVER PGSQL_DATABASE PGSQL_PORT JWT_SECRET; do
+                #       eval "val=\$$var"
+                #       [ -n "$val" ] && sed -i "s|__${var}__|$val|g" .env 2>/dev/null || true
+                #     done
+                #   displayName: 'Replace __VAR__ placeholders (fallback)'
+                #   env:
+                #     APP_PORT: $(APP_PORT)
+                #     PGSQL_USERNAME: $(PGSQL_USERNAME)
+                #     PGSQL_PASSWORD: $(PGSQL_PASSWORD)
+                #     PGSQL_SERVER: $(PGSQL_SERVER)
+                #     PGSQL_DATABASE: $(PGSQL_DATABASE)
+                #     PGSQL_PORT: $(PGSQL_PORT)
+                #     JWT_SECRET: $(JWT_SECRET)
 
                 # -----------------------------------------------------------------
                 # Deploy to Azure App Service (Dev)
@@ -248,165 +249,165 @@ stages:
                 - task: AzureWebApp@1
                   displayName: 'Deploy to Azure App Service (Dev)'
                   inputs:
-                    azureSubscription: $(AZURE_SERVICE_CONNECTION_DEV)
+                    azureSubscription: AZURE_SERVICE_CONNECTION_DEV
                     appType: 'webAppLinux'
                     appName: $(AZURE_WEBAPP_NAME_DEV)
                     package: '$(Pipeline.Workspace)/drop'
                     runtimeStack: 'NODE|22-lts'
 
-  # ===========================================================================
-  # STAGE 3: DEPLOY TO uat (branch: uat)
-  # ===========================================================================
-  - stage: Deploy_UAT
-    displayName: 'Deploy to uat'
-    dependsOn: Build
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/uat'))
-    jobs:
-      - deployment: DeployUAT
-        displayName: 'Deploy to uat'
-        environment: 'uat'
-        variables:
-          - group: testcase-api-uat-vg
-        pool:
-          vmImage: 'ubuntu-latest'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - task: DownloadPipelineArtifact@1
-                  displayName: 'Download artifact'
-                  inputs:
-                    buildType: 'current'
-                    artifactName: $(artifactName)
-                    targetPath: '$(Pipeline.Workspace)/drop'
+  # # ===========================================================================
+  # # STAGE 3: DEPLOY TO uat (branch: uat)
+  # # ===========================================================================
+  # - stage: Deploy_UAT
+  #   displayName: 'Deploy to uat'
+  #   dependsOn: Build
+  #   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/uat'))
+  #   jobs:
+  #     - deployment: DeployUAT
+  #       displayName: 'Deploy to uat'
+  #       environment: 'uat'
+  #       variables:
+  #         - group: testcase-api-uat-vg
+  #       pool:
+  #         vmImage: 'ubuntu-latest'
+  #       strategy:
+  #         runOnce:
+  #           deploy:
+  #             steps:
+  #               - task: DownloadPipelineArtifact@1
+  #                 displayName: 'Download artifact'
+  #                 inputs:
+  #                   buildType: 'current'
+  #                   artifactName: $(artifactName)
+  #                   targetPath: '$(Pipeline.Workspace)/drop'
 
-                - task: NodeTool@0
-                  displayName: 'Use Node.js $(nodeVersion)'
-                  inputs:
-                    versionSpec: $(nodeVersion)
+  #               - task: NodeTool@0
+  #                 displayName: 'Use Node.js $(nodeVersion)'
+  #                 inputs:
+  #                   versionSpec: $(nodeVersion)
 
-                - script: |
-                    cd $(Pipeline.Workspace)/drop
-                    if [ -f .env.template ]; then cp .env.template .env; fi
-                  displayName: 'Apply config from template'
+  #               - script: |
+  #                   cd $(Pipeline.Workspace)/drop
+  #                   if [ -f .env.template ]; then cp .env.template .env; fi
+  #                 displayName: 'Apply config from template'
 
-                - task: replacetokens@5
-                  displayName: 'Replace tokens in config'
-                  inputs:
-                    rootDirectory: '$(Pipeline.Workspace)/drop'
-                    targetFiles: '**/.env'
-                    encoding: 'auto'
-                    tokenPattern: 'custom'
-                    tokenPrefix: '__'
-                    tokenSuffix: '__'
-                    writeBOM: false
-                    actionOnMissing: 'warn'
-                    actionOnNoFiles: 'continue'
-                  continueOnError: true
+  #               - task: replacetokens@5
+  #                 displayName: 'Replace tokens in config'
+  #                 inputs:
+  #                   rootDirectory: '$(Pipeline.Workspace)/drop'
+  #                   targetFiles: '**/.env'
+  #                   encoding: 'auto'
+  #                   tokenPattern: 'custom'
+  #                   tokenPrefix: '__'
+  #                   tokenSuffix: '__'
+  #                   writeBOM: false
+  #                   actionOnMissing: 'warn'
+  #                   actionOnNoFiles: 'continue'
+  #                 continueOnError: true
 
-                - script: |
-                    set -e
-                    cd $(Pipeline.Workspace)/drop
-                    [ -f .env ] || touch .env
-                    for var in APP_PORT PGSQL_USERNAME PGSQL_PASSWORD PGSQL_SERVER PGSQL_DATABASE PGSQL_PORT JWT_SECRET; do
-                      eval "val=\$$var"
-                      [ -n "$val" ] && sed -i "s|__${var}__|$val|g" .env 2>/dev/null || true
-                    done
-                  displayName: 'Replace __VAR__ placeholders (fallback)'
-                  env:
-                    APP_PORT: $(APP_PORT)
-                    PGSQL_USERNAME: $(PGSQL_USERNAME)
-                    PGSQL_PASSWORD: $(PGSQL_PASSWORD)
-                    PGSQL_SERVER: $(PGSQL_SERVER)
-                    PGSQL_DATABASE: $(PGSQL_DATABASE)
-                    PGSQL_PORT: $(PGSQL_PORT)
-                    JWT_SECRET: $(JWT_SECRET)
+  #               - script: |
+  #                   set -e
+  #                   cd $(Pipeline.Workspace)/drop
+  #                   [ -f .env ] || touch .env
+  #                   for var in APP_PORT PGSQL_USERNAME PGSQL_PASSWORD PGSQL_SERVER PGSQL_DATABASE PGSQL_PORT JWT_SECRET; do
+  #                     eval "val=\$$var"
+  #                     [ -n "$val" ] && sed -i "s|__${var}__|$val|g" .env 2>/dev/null || true
+  #                   done
+  #                 displayName: 'Replace __VAR__ placeholders (fallback)'
+  #                 env:
+  #                   APP_PORT: $(APP_PORT)
+  #                   PGSQL_USERNAME: $(PGSQL_USERNAME)
+  #                   PGSQL_PASSWORD: $(PGSQL_PASSWORD)
+  #                   PGSQL_SERVER: $(PGSQL_SERVER)
+  #                   PGSQL_DATABASE: $(PGSQL_DATABASE)
+  #                   PGSQL_PORT: $(PGSQL_PORT)
+  #                   JWT_SECRET: $(JWT_SECRET)
 
-                - task: AzureWebApp@1
-                  displayName: 'Deploy to Azure App Service (uat)'
-                  inputs:
-                    azureSubscription: $(AZURE_SERVICE_CONNECTION_UAT)
-                    appType: 'webAppLinux'
-                    appName: $(AZURE_WEBAPP_NAME_UAT)
-                    package: '$(Pipeline.Workspace)/drop'
-                    runtimeStack: 'NODE|22-lts'
+  #               - task: AzureWebApp@1
+  #                 displayName: 'Deploy to Azure App Service (uat)'
+  #                 inputs:
+  #                   azureSubscription: $(AZURE_SERVICE_CONNECTION_UAT)
+  #                   appType: 'webAppLinux'
+  #                   appName: $(AZURE_WEBAPP_NAME_UAT)
+  #                   package: '$(Pipeline.Workspace)/drop'
+  #                   runtimeStack: 'NODE|22-lts'
 
-  # ===========================================================================
-  # STAGE 4: DEPLOY TO PRODUCTION (branch: prod)
-  # ===========================================================================
-  # Environment "Prod" should have approval gates in Azure DevOps (Environments).
-  # Condition prevents accidental prod deploy from other branches.
-  # ---------------------------------------------------------------------------
-  - stage: Deploy_Prod
-    displayName: 'Deploy to Production'
-    dependsOn: Build
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/prod'))
-    jobs:
-      - deployment: DeployProd
-        displayName: 'Deploy to Production'
-        environment: 'Prod'
-        variables:
-          - group: testcase-api-prod-vg
-        pool:
-          vmImage: 'ubuntu-latest'
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - task: DownloadPipelineArtifact@1
-                  displayName: 'Download artifact'
-                  inputs:
-                    buildType: 'current'
-                    artifactName: $(artifactName)
-                    targetPath: '$(Pipeline.Workspace)/drop'
+  # # ===========================================================================
+  # # STAGE 4: DEPLOY TO PRODUCTION (branch: prod)
+  # # ===========================================================================
+  # # Environment "Prod" should have approval gates in Azure DevOps (Environments).
+  # # Condition prevents accidental prod deploy from other branches.
+  # # ---------------------------------------------------------------------------
+  # - stage: Deploy_Prod
+  #   displayName: 'Deploy to Production'
+  #   dependsOn: Build
+  #   condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/prod'))
+  #   jobs:
+  #     - deployment: DeployProd
+  #       displayName: 'Deploy to Production'
+  #       environment: 'Prod'
+  #       variables:
+  #         - group: testcase-api-prod-vg
+  #       pool:
+  #         vmImage: 'ubuntu-latest'
+  #       strategy:
+  #         runOnce:
+  #           deploy:
+  #             steps:
+  #               - task: DownloadPipelineArtifact@1
+  #                 displayName: 'Download artifact'
+  #                 inputs:
+  #                   buildType: 'current'
+  #                   artifactName: $(artifactName)
+  #                   targetPath: '$(Pipeline.Workspace)/drop'
 
-                - script: |
-                    cd $(Pipeline.Workspace)/drop
-                    if [ -f .env.template ]; then cp .env.template .env; fi
-                  displayName: 'Apply config from template'
+  #               - script: |
+  #                   cd $(Pipeline.Workspace)/drop
+  #                   if [ -f .env.template ]; then cp .env.template .env; fi
+  #                 displayName: 'Apply config from template'
 
-                - task: replacetokens@5
-                  displayName: 'Replace tokens in config'
-                  inputs:
-                    rootDirectory: '$(Pipeline.Workspace)/drop'
-                    targetFiles: '**/.env'
-                    encoding: 'auto'
-                    tokenPattern: 'custom'
-                    tokenPrefix: '__'
-                    tokenSuffix: '__'
-                    writeBOM: false
-                    actionOnMissing: 'warn'
-                    actionOnNoFiles: 'continue'
-                  continueOnError: true
+  #               - task: replacetokens@5
+  #                 displayName: 'Replace tokens in config'
+  #                 inputs:
+  #                   rootDirectory: '$(Pipeline.Workspace)/drop'
+  #                   targetFiles: '**/.env'
+  #                   encoding: 'auto'
+  #                   tokenPattern: 'custom'
+  #                   tokenPrefix: '__'
+  #                   tokenSuffix: '__'
+  #                   writeBOM: false
+  #                   actionOnMissing: 'warn'
+  #                   actionOnNoFiles: 'continue'
+  #                 continueOnError: true
 
-                - script: |
-                    set -e
-                    cd $(Pipeline.Workspace)/drop
-                    [ -f .env ] || touch .env
-                    for var in APP_PORT PGSQL_USERNAME PGSQL_PASSWORD PGSQL_SERVER PGSQL_DATABASE PGSQL_PORT JWT_SECRET; do
-                      eval "val=\$$var"
-                      [ -n "$val" ] && sed -i "s|__${var}__|$val|g" .env 2>/dev/null || true
-                    done
-                  displayName: 'Replace __VAR__ placeholders (fallback)'
-                  env:
-                    APP_PORT: $(APP_PORT)
-                    PGSQL_USERNAME: $(PGSQL_USERNAME)
-                    PGSQL_PASSWORD: $(PGSQL_PASSWORD)
-                    PGSQL_SERVER: $(PGSQL_SERVER)
-                    PGSQL_DATABASE: $(PGSQL_DATABASE)
-                    PGSQL_PORT: $(PGSQL_PORT)
-                    JWT_SECRET: $(JWT_SECRET)
+  #               - script: |
+  #                   set -e
+  #                   cd $(Pipeline.Workspace)/drop
+  #                   [ -f .env ] || touch .env
+  #                   for var in APP_PORT PGSQL_USERNAME PGSQL_PASSWORD PGSQL_SERVER PGSQL_DATABASE PGSQL_PORT JWT_SECRET; do
+  #                     eval "val=\$$var"
+  #                     [ -n "$val" ] && sed -i "s|__${var}__|$val|g" .env 2>/dev/null || true
+  #                   done
+  #                 displayName: 'Replace __VAR__ placeholders (fallback)'
+  #                 env:
+  #                   APP_PORT: $(APP_PORT)
+  #                   PGSQL_USERNAME: $(PGSQL_USERNAME)
+  #                   PGSQL_PASSWORD: $(PGSQL_PASSWORD)
+  #                   PGSQL_SERVER: $(PGSQL_SERVER)
+  #                   PGSQL_DATABASE: $(PGSQL_DATABASE)
+  #                   PGSQL_PORT: $(PGSQL_PORT)
+  #                   JWT_SECRET: $(JWT_SECRET)
 
-                # -----------------------------------------------------------------
-                # Production deploy: Azure App Service
-                # Configure approval on Environment "Prod" in Azure DevOps.
-                # Optional: use slot (staging) then swap for zero-downtime.
-                # -----------------------------------------------------------------
-                - task: AzureWebApp@1
-                  displayName: 'Deploy to Azure App Service (Production)'
-                  inputs:
-                    azureSubscription: $(AZURE_SERVICE_CONNECTION_PROD)
-                    appType: 'webAppLinux'
-                    appName: $(AZURE_WEBAPP_NAME_PROD)
-                    package: '$(Pipeline.Workspace)/drop'
-                    runtimeStack: 'NODE|22-lts'
+  #               # -----------------------------------------------------------------
+  #               # Production deploy: Azure App Service
+  #               # Configure approval on Environment "Prod" in Azure DevOps.
+  #               # Optional: use slot (staging) then swap for zero-downtime.
+  #               # -----------------------------------------------------------------
+  #               - task: AzureWebApp@1
+  #                 displayName: 'Deploy to Azure App Service (Production)'
+  #                 inputs:
+  #                   azureSubscription: $(AZURE_SERVICE_CONNECTION_PROD)
+  #                   appType: 'webAppLinux'
+  #                   appName: $(AZURE_WEBAPP_NAME_PROD)
+  #                   package: '$(Pipeline.Workspace)/drop'
+  #                   runtimeStack: 'NODE|22-lts'
